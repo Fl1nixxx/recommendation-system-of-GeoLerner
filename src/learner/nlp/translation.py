@@ -8,34 +8,49 @@ import pandas as pd
 
 from learner.nlp.llm import QwenJSONClient
 
-
 TRANSLATION_PROMPT = """
-Ты — профессиональный литературный переводчик.
-Тебе передают названия книг, авторов и годы публикации.
-Твоя задача — определить правильное русское название
-каждой книги.
+Ты — профессиональный переводчик названий художественных
+и развлекательных произведений на русский язык.
 
-ПРАВИЛА:
+Тебе передают книги, фильмы и сериалы.
+Твоя задача — вернуть естественное русское название
+каждого произведения.
 
-1. Если существует известное русское название произведения,
-   обязательно используй именно его.
+ПРАВИЛА ПЕРЕВОДА:
 
-2. Учитывай автора и год публикации, чтобы не перепутать
-   разные произведения с одинаковыми названиями.
+1. КНИГИ:
+   - Используй общеизвестное русское литературное название,
+     если оно существует.
+   - Учитывай автора и год публикации.
+   - Если официального перевода нет, предложи
+     естественный литературный перевод.
 
-3. Если известного русского названия нет,
-   создай естественный литературный перевод.
+2. ФИЛЬМЫ:
+   - Используй известное русское прокатное название,
+     если оно существует.
+   - Учитывай страну производства и год выхода.
+   - Не путай разные фильмы с одинаковыми названиями.
 
-4. Не оставляй английское название без перевода,
-   если возможно подобрать русский вариант.
+3. СЕРИАЛЫ:
+   - Используй известное русское локализованное название,
+     если оно существует.
+   - Учитывай страну производства и год выхода.
+   - Если официальное название неизвестно,
+     предложи естественный перевод.
 
-5. Не переводи имена авторов.
+ОБЩИЕ ТРЕБОВАНИЯ:
 
-6. Не добавляй пояснений, альтернатив и комментариев.
-
-7. Не пропускай ни одной книги.
-
-8. row_key должен точно соответствовать входному объекту.
+- Переводи названия с любого языка.
+- Не оставляй иностранное название без перевода.
+- Не делай механическую транслитерацию,
+  если существует естественный русский перевод.
+- Не выдумывай официальность перевода.
+- Сохраняй смысл и особенности оригинального названия.
+- Не переводи имена авторов, режиссёров и персонажей.
+- Не добавляй альтернативные названия и пояснения.
+- Возвращай исключительно русское название.
+- Не пропускай входные произведения.
+- row_key должен точно соответствовать входному объекту.
 
 Верни только JSON:
 {
@@ -46,15 +61,19 @@ TRANSLATION_PROMPT = """
         }
     ]
 }
+
+Не добавляй Markdown и пояснения.
 """
 
 CYRILLIC_PATTERN = re.compile(r"[А-Яа-яЁё]")
 LATIN_PATTERN = re.compile(r"[A-Za-z]")
 
-def _clean_value(value: Any) -> str:
-
+def clean_value(value: Any) -> str:
     if value is None:
         return ""
+
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(item) for item in value)
 
     try:
         if pd.isna(value):
@@ -62,29 +81,60 @@ def _clean_value(value: Any) -> str:
     except (TypeError, ValueError):
         pass
 
-    return str(value).strip()
+    value = str(value).strip()
 
-def _contains_cyrillic(value: str) -> bool:
+    if value.casefold() in {"none", "null", "nan", "[]"}:
+        return ""
+
+    return value
+
+
+def contains_cyrillic(value: str) -> bool:
     return bool(CYRILLIC_PATTERN.search(value))
 
-def _contains_latin(value: str) -> bool:
+def contains_latin(value: str) -> bool:
     return bool(LATIN_PATTERN.search(value))
 
-
-def _valid_translation(original: str,translated: str,) -> bool:
-
-    if not translated:
+def needs_translation(title: str) -> bool:
+    if not title:
         return False
 
-    if translated.casefold() in {"null", "none", "nan"}:
+    if not any(char.isalpha() for char in title):
         return False
 
-    if _contains_latin(original):
-        return _contains_cyrillic(translated)
+    if contains_cyrillic(title) and not contains_latin(title):
+        return False
 
     return True
 
-def translate_book_titles_ru(result: pd.DataFrame,llm: QwenJSONClient,*,batch_size: int = 5,verbose: bool = True,) -> pd.DataFrame:
+
+def valid_translation(original: str,translated: str,) -> bool:
+    if not translated:
+        return False
+
+    if translated.casefold() in {"none", "null", "nan"}:
+        return False
+
+    if not contains_cyrillic(translated):
+        return False
+
+    if translated.casefold() == original.casefold():
+        return False
+
+    return True
+
+
+
+CONTENT_TYPES = {
+    "books": "Книга",
+    "book": "Книга",
+    "movies": "Фильм",
+    "movie": "Фильм",
+    "series": "Сериал",
+    "tv": "Сериал",
+    "tv series": "Сериал",}
+
+def translate_book_titles_ru(result: pd.DataFrame,llm: QwenJSONClient,*,batch_size: int = 5,verbose: bool = False,) -> pd.DataFrame:
 
     if result.empty:
         return result.copy()
@@ -101,63 +151,56 @@ def translate_book_titles_ru(result: pd.DataFrame,llm: QwenJSONClient,*,batch_si
     output = result.copy().reset_index(drop=True)
 
     if "original_title" not in output.columns:
-        output["original_title"] = (output["title"].apply(_clean_value))
+        output["original_title"] = (output["title"].apply(clean_value))
 
     else:
+        output["original_title"] = [clean_value(original) or clean_value(title)
+            for original, title in zip(output["original_title"],output["title"],)]
 
-        output["original_title"] = [_clean_value(original) or _clean_value(title) for original, title in zip(output["original_title"],output["title"],)]
-    output["title_ru"] = output["original_title"]
-    
+    output.drop(columns=["title_ru"],errors="ignore",inplace=True,)
+
     records = []
-
     skipped = 0
 
     for row_key, row in output.iterrows():
 
-        content_type = _clean_value(row.get("content_type")).casefold()
+        content_type = clean_value(row.get("content_type")).casefold()
 
-        if content_type != "books":
+        if content_type not in CONTENT_TYPES:
             continue
 
-        title = _clean_value(row["original_title"])
+        title = clean_value(row["original_title"])
 
         if not title:
             continue
 
-        if (_contains_cyrillic(title)and not _contains_latin(title)):
+        if not needs_translation(title):
             skipped += 1
             continue
 
-        if not _contains_latin(title):
-            skipped += 1
-            continue
-
+        year = (clean_value(row.get("year"))or clean_value(row.get("release_year"))or clean_value(row.get("first_publish_year")))
+        country = (clean_value(row.get("country")) or clean_value(row.get("countries")) or clean_value(row.get("production_countries")))
+        creator = (clean_value(row.get("authors")) or clean_value(row.get("directors")) or clean_value(row.get("director")))
+       
         records.append({
             "row_key": int(row_key),
+            "content_type": CONTENT_TYPES[content_type],
             "title": title,
-            "author": _clean_value(
-                row.get("authors")
-            ),
-            "year": _clean_value(
-                row.get("year")
-            ),})
+            "author_or_director": creator,
+            "year": year,
+            "country": country,})
 
     if not records:
-
         if verbose:
             print("Нет иностранных названий для перевода.")
 
-        output["title"] = output["title_ru"]
-
         return output
-
-    translated_keys = set()
-
-    failed_keys = set()
+       
+    translated_titles: dict[int, str] = {}
 
     def process_batch(batch):
 
-        payload = json.dumps({"books": batch},ensure_ascii=False,)
+        payload = json.dumps({"items": batch},ensure_ascii=False,)
 
         response = llm.ask_json(TRANSLATION_PROMPT,payload,)
         translations = response.get("translations",[],)
@@ -173,11 +216,9 @@ def translate_book_titles_ru(result: pd.DataFrame,llm: QwenJSONClient,*,batch_si
 
             if not isinstance(item, dict):
                 continue
-
             try:
                 row_key = int(item["row_key"])
-
-                translated = _clean_value(item["title_ru"])
+                translated = clean_value(item["title_ru"])
 
             except (KeyError, TypeError, ValueError):
                 continue
@@ -185,12 +226,12 @@ def translate_book_titles_ru(result: pd.DataFrame,llm: QwenJSONClient,*,batch_si
             if row_key not in batch_keys:
                 continue
 
-            original = output.at[row_key,"original_title"]
+            original = clean_value(output.at[row_key, "original_title"])
 
-            if not _valid_translation(original,translated,):
+            if not valid_translation(original,translated,):
                 continue
 
-            output.at[row_key,"title_ru"] = translated
+            translated_titles[row_key] = translated
             processed.add(row_key)
 
         return processed
@@ -198,55 +239,43 @@ def translate_book_titles_ru(result: pd.DataFrame,llm: QwenJSONClient,*,batch_si
     for start in range(0,len(records),batch_size,):
 
         batch = records[start:start + batch_size]
-
-        if verbose:
-            print(f"\nПеревод книг: "f"{start + 1}-{start + len(batch)} "f"из {len(records)}" )
-
         try:
-
-            processed = process_batch(batch)
-            translated_keys.update(processed)
+            process_batch(batch)
 
         except Exception as error:
-
             if verbose:
                 print(f"Ошибка перевода батча: {error}")
 
-    remaining = [item for item in records if item["row_key"] not in translated_keys]
-
-    if verbose and remaining:
-        print(f"\nПовторная обработка: "f"{len(remaining)} названий.")
+    remaining = [item for item in records if item["row_key"] not in translated_titles]
+    failed = 0
 
     for item in remaining:
         try:
-
             processed = process_batch([item])
 
-            if item["row_key"] in processed:
-                translated_keys.update(processed)
+            if item["row_key"] not in processed:
+                failed += 1
 
-            else:
-                failed_keys.add(item["row_key"])
                 if verbose:
                     print("Не удалось перевести:",item["title"],)
 
         except Exception as error:
 
-            failed_keys.add(item["row_key"])
+            failed += 1
+
             if verbose:
                 print(f"Ошибка для '{item['title']}': {error}")
 
+    for row_key, translated in translated_titles.items():
+
+        output.at[row_key, "title"] = translated
+
     if verbose:
 
-        print("\n" + "=" * 45)
-        print("СТАТИСТИКА ПЕРЕВОДА")
-        print("=" * 45)
-
-        print("Книг для перевода:", len(records))
-        print("Успешно переведено:", len(translated_keys))
-        print("Не удалось перевести:", len(failed_keys))
+        print("\nСтатистика перевода:")
+        print("Передано на перевод:", len(records))
+        print("Успешно переведено:", len(translated_titles))
+        print("Не удалось перевести:", failed)
         print("Уже на русском:", skipped)
-
-        print("=" * 45)
 
     return output
