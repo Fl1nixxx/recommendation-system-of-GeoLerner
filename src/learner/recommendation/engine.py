@@ -224,7 +224,7 @@ class SearchEngine:
 
         result = build_results(self.metadata, selected, years, scores)
         if translate_titles:
-            result = translate_book_titles_ru(result, self.llm)
+            result = translate_book_titles_ru(result,self.llm,batch_size=5,verbose=verbose,)
 
         if verbose:
             print("\n" + "=" * 48)
