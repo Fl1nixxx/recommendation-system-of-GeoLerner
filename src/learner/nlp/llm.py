@@ -6,6 +6,10 @@ from typing import Any
 
 
 class QwenResponseError(RuntimeError):
+     """Invalid JSON response from Qwen."""
+
+
+
 
 class QwenJSONClient:
     def __init__(self,model: Any,tokenizer: Any,*,max_new_tokens: int = 700,retries: int = 1) -> None:
