@@ -236,9 +236,6 @@ def translate_book_titles_ru(result: pd.DataFrame,llm: QwenJSONClient,*,batch_si
             if verbose:
                 print(f"Ошибка для '{item['title']}': {error}")
 
-
-    output["title"] = output["title_ru"]
-
     if verbose:
 
         print("\n" + "=" * 45)
