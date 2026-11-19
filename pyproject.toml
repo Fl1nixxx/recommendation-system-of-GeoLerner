@@ -1,0 +1,41 @@
+[project]
+name = "learner-recommender"
+version = "0.1.0"
+description = "NLP and semantic recommendation components for Learner"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "Learner project" }]
+dependencies = [
+    "numpy>=1.26,<3",
+    "pandas>=2.2,<3",
+    "torch>=2.5",
+    "transformers>=4.45,<5",
+    "sentence-transformers>=3.3,<6",
+    "pycountry>=24.6",
+    "Babel>=2.16",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/learner"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
